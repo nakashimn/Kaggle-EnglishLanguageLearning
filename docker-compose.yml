@@ -1,9 +1,9 @@
 version: '3.3'
 services:
-  FeedbackPrizeEnglishLanguageLearning:
+  feedback_prize_english_language_learning:
     build: ./Dockerfile
-    container_name: FeedbackPrizeEnglishLanguageLearning
-    hostname: FeedbackPrizeEnglishLanguageLearning
+    container_name: feedback_prize_english_language_learning
+    hostname: reedback_prize_english_language_learning
     shm_size: '28gb'
     deploy:
       resources:
