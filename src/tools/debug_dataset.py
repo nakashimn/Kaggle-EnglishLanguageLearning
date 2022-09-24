@@ -9,9 +9,9 @@ import torch
 from bertopic import BERTopic
 from transformers import AutoTokenizer
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-from config.sample import config
+from config.distilbert_v0 import config
 from components.preprocessor import DataPreprocessor
-from components.datamodule import NlpDataset
+from components.datamodule import FpDataset, DataModule
 
 def fix_seed(seed):
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -31,6 +31,16 @@ df_train = data_preprocessor.train_dataset()
 
 # FpDataSet
 fix_seed(config["random_seed"])
-dataset = NlpDataset(df_train, config["datamodule"]["dataset"], AutoTokenizer)
+dataset = FpDataset(df_train, config["datamodule"]["dataset"], AutoTokenizer)
 batch = dataset.__getitem__(0)
-dataset.val
+ids = torch.unsqueeze(batch[0], 0)
+masks = torch.unsqueeze(batch[1], 0)
+labels = torch.unsqueeze(batch[2], 0)
+
+# DataModule
+data_module = DataModule(df_train, None, None, FpDataset, AutoTokenizer, config["datamodule"], None)
+for batch in data_module.train_dataloader():
+    ids = batch[0]
+    masks = batch[1]
+    labels = batch[2]
+    break

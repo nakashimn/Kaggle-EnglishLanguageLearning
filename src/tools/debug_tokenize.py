@@ -10,7 +10,7 @@ from transformers import AutoTokenizer
 import traceback
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-from config.sample import config
+from config.distilbert_v0 import config
 from components.preprocessor import TextCleaner, DataPreprocessor
 
 ###

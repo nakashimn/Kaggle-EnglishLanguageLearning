@@ -1,11 +1,12 @@
 import sys
 import pathlib
 import torch
+
 from transformers import AutoTokenizer
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-# from config.distilbert import config
-from config.sample import config
-from components.models import NlpModel
+from config.distilbert_v0 import config
+from components.models import FpModel
+from components.loss_functions import MultiTaskLoss
 
 ###
 # sample
@@ -29,5 +30,16 @@ ids = torch.tensor([token["input_ids"]])
 masks = torch.tensor([token["attention_mask"]])
 
 # model
-model = NlpModel(config["model"])
-model(ids, masks)
+model = FpModel(config["model"])
+pred = model(ids, masks)
+
+pred = torch.unsqueeze(pred, dim=0)
+
+# calc loss
+# criterion = torch.nn.CrossEntropyLoss()
+criterion = MultiTaskLoss("torch.nn.CrossEntropyLoss", 6)
+xx = torch.tensor([[[0.8, 0.2, 0.0], [0.8, 0.2, 0.0]], [[0.8, 0.2, 0.0], [0.8, 0.2, 0.0]]]).float()
+yy = torch.tensor([[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]]).float()
+criterion(xx, yy)
+
+criterion(pred, labels)
