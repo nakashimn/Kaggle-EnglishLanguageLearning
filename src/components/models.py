@@ -13,9 +13,9 @@ from transformers import AutoModel
 import traceback
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[0]))
-from loss_functions import FocalLoss, PseudoLoss
+from loss_functions import MultiTaskLoss
 
-class NlpModelBase(LightningModule, metaclass=ABCMeta):
+class FpModelBase(LightningModule, metaclass=ABCMeta):
     def __init__(self, config):
         super().__init__()
 
@@ -54,14 +54,14 @@ class NlpModelBase(LightningModule, metaclass=ABCMeta):
         logits = self.forward(ids, masks)
         loss = self.criterion(logits, labels)
         logit = logits.detach()
-        prob = logits.softmax(axis=1).detach()
+        prob = logits.softmax(axis=2).detach()
         label = labels.detach()
         return {"loss": loss, "logit": logit, "prob": prob, "label": label}
 
     def predict_step(self, batch, batch_idx):
         ids, masks = batch
         logits = self.forward(ids, masks)
-        prob = logits.softmax(axis=1).detach()
+        prob = logits.softmax(axis=2).detach()
         return {"prob": prob}
 
     def configure_optimizers(self):
@@ -75,19 +75,25 @@ class NlpModelBase(LightningModule, metaclass=ABCMeta):
         )
         return [optimizer], [scheduler]
 
-class NlpModel(NlpModelBase):
+class FpModel(FpModelBase):
     def __init__(self, config):
         super().__init__(config)
 
-        # const
-        self.fc = self.create_fully_connected()
+        # Fully Connection Layers
+        self.fc_0 = self.create_fully_connected()
+        self.fc_1 = self.create_fully_connected()
+        self.fc_2 = self.create_fully_connected()
+        self.fc_3 = self.create_fully_connected()
+        self.fc_4 = self.create_fully_connected()
+        self.fc_5 = self.create_fully_connected()
 
     def create_base_model(self):
         base_model = AutoModel.from_pretrained(
             self.config["base_model_name"],
             return_dict=False
         )
-        base_model.gradient_checkpointing_enable()
+        if self.config["enable_gradient_checkpoint"]:
+            base_model.gradient_checkpointing_enable()
         if not self.config["freeze_base_model"]:
             return base_model
         for param in base_model.parameters():
@@ -100,8 +106,15 @@ class NlpModel(NlpModelBase):
     def forward(self, ids, masks):
         out = self.base_model(ids, masks)
         out = self.dropout(out[0][:, 0, :])
-        out = self.fc(out)
-        return out
+        out_0 = self.fc_0(out)
+        out_1 = self.fc_1(out)
+        out_2 = self.fc_2(out)
+        out_3 = self.fc_3(out)
+        out_4 = self.fc_4(out)
+        out_5 = self.fc_5(out)
+        preds = torch.stack([out_0, out_1, out_2, out_3, out_4, out_5])
+        preds = preds.permute(1, 0, 2)
+        return preds
 
     def training_epoch_end(self, outputs):
         logits = torch.cat([out["logit"] for out in outputs])
@@ -124,7 +137,7 @@ class NlpModel(NlpModelBase):
 
         return super().validation_epoch_end(outputs)
 
-class NlpModelPseudo(NlpModelBase):
+class FpModelPseudo(FpModelBase):
     def __init__(self, config):
         super().__init__(config)
 
@@ -166,7 +179,7 @@ class NlpModelPseudo(NlpModelBase):
         logits = self.forward(ids, masks)
         loss = self.criterion(logits, labels, pseudos, self.trainer.current_epoch)
         logit = logits.detach()
-        prob = logits.softmax(axis=1).detach()
+        prob = logits.softmax(axis=2).detach()
         label = labels.detach()
         pseudo = pseudos.detach()
         return {"loss": loss, "logit": logit, "prob": prob, "label": label, "pseudo": pseudo}
@@ -207,11 +220,11 @@ class NlpModelPseudo(NlpModelBase):
         with torch.no_grad():
             for ids, masks in tqdm(pred_dataloader):
                 logits = self.forward(ids.detach().to("cuda"), masks.detach().to("cuda"))
-                probs.append(logits.softmax(axis=1).detach().cpu().numpy())
+                probs.append(logits.softmax(axis=2).detach().cpu().numpy())
         self.train()
         return np.concatenate(probs)
 
-class NlpModelFgm(NlpModelBase):
+class FpNlpModelFgm(FpModelBase):
     def __init__(self, config):
         super().__init__(config)
 
@@ -322,20 +335,28 @@ class MeanPooling(nn.Module):
         mean_embeddings = sum_embeddings / sum_mask
         return mean_embeddings
 
-class NlpModelMeanPooling(NlpModelBase):
+class FpModelMeanPooling(FpModelBase):
     def __init__(self, config):
         super().__init__(config)
 
         # const
         self.pooler = MeanPooling()
-        self.fc = self.create_fully_connected()
+
+        # Fully Connection Layers
+        self.fc_0 = self.create_fully_connected()
+        self.fc_1 = self.create_fully_connected()
+        self.fc_2 = self.create_fully_connected()
+        self.fc_3 = self.create_fully_connected()
+        self.fc_4 = self.create_fully_connected()
+        self.fc_5 = self.create_fully_connected()
 
     def create_base_model(self):
         base_model = AutoModel.from_pretrained(
             self.config["base_model_name"],
             return_dict=True
         )
-        base_model.gradient_checkpointing_enable()
+        if self.config["enable_gradient_checkpoint"]:
+            base_model.gradient_checkpointing_enable()
         if not self.config["freeze_base_model"]:
             return base_model
         for param in base_model.parameters():
@@ -349,8 +370,15 @@ class NlpModelMeanPooling(NlpModelBase):
         out = self.base_model(ids, masks, output_hidden_states=False)
         out = self.pooler(out.last_hidden_state, masks)
         out = self.dropout(out)
-        out = self.fc(out)
-        return out
+        out_0 = self.fc_0(out)
+        out_1 = self.fc_1(out)
+        out_2 = self.fc_2(out)
+        out_3 = self.fc_3(out)
+        out_4 = self.fc_4(out)
+        out_5 = self.fc_5(out)
+        preds = torch.stack([out_0, out_1, out_2, out_3, out_4, out_5])
+        preds = preds.permute(1, 0, 2)
+        return preds
 
     def training_epoch_end(self, outputs):
         logits = torch.cat([out["logit"] for out in outputs])

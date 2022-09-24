@@ -6,16 +6,17 @@ from torch.utils.data import DataLoader, Dataset
 from pytorch_lightning import LightningDataModule
 import traceback
 
-class NlpDataset(Dataset):
+class FpDataset(Dataset):
     def __init__(self, df, config, Tokenizer, transform=None):
         self.config = config
         self.val = self.read_values(df)
         self.labels = None
-        if self.config["label"] in df.keys():
+        if np.array([l in df.keys() for l in self.config["labels"]]).all():
             self.labels = self.read_labels(df)
         self.tokenizer = Tokenizer.from_pretrained(
             self.config["base_model_name"],
-            use_fast=self.config["use_fast_tokenizer"]
+            use_fast=self.config["use_fast_tokenizer"],
+            additional_special_tokens=self.config["additional_special_tokens"]
         )
         self.transform = transform
 
@@ -32,16 +33,17 @@ class NlpDataset(Dataset):
         return ids, masks
 
     def read_values(self, df):
-        values = df["features"].values
+        values = df[self.config["features"]].values.flatten()
         return values
 
     def read_labels(self, df):
-        labels = F.one_hot(
-            torch.tensor(
-                [self.config[self.config["label"]][d] for d in df[self.config["label"]]]
-            ),
-            num_classes=self.config["num_class"]
-        ).float()
+        labels = [
+            torch.concat([F.one_hot(
+                    torch.tensor([self.config["label_val"].index(df.loc[idx, label])]),
+                    num_classes=self.config["num_class"]
+                ).float() for label in self.config["labels"]
+            ]) for idx in df.index
+        ]
         return labels
 
     def tokenize(self, text):
@@ -55,8 +57,6 @@ class NlpDataset(Dataset):
         ids = torch.tensor(token["input_ids"], dtype=torch.long)
         masks = torch.tensor(token["attention_mask"], dtype=torch.long)
         return ids, masks
-
-
 
 class DataModule(LightningDataModule):
     def __init__(
@@ -114,7 +114,7 @@ class DataModule(LightningDataModule):
         )
         return DataLoader(dataset, **self.config["pred_loader"])
 
-class NlpDatasetPseudo(NlpDataset):
+class NlpDatasetPseudo(FpDataset):
     def __init__(self, df, config, Tokenizer, transform=None):
         self.config = config
         self.val = self.read_values(df)

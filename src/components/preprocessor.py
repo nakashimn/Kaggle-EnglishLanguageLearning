@@ -15,22 +15,6 @@ def replace_decoding_with_cp1252(error: UnicodeError):
 codecs.register_error("replace_encoding_with_utf8", replace_encoding_with_utf8)
 codecs.register_error("replace_decoding_with_cp1252", replace_decoding_with_cp1252)
 
-class DataPreprocessor:
-    def __init__(self, config):
-        self.config = config
-
-    def train_dataset(self):
-        df_train = pd.read_csv(self.config["path"]["traindata"])
-        return df_train
-
-    def test_dataset(self):
-        df_test = pd.read_csv(self.config["path"]["testdata"])
-        return df_test
-
-    def pseudo_dtaset(self):
-        # Inplement
-        return None
-
 class TextCleaner:
     def __init__(self):
         pass
@@ -82,13 +66,31 @@ class TextCleaner:
         data[col] = data[col].str.replace(r'([a-zA-Z])\1{2,}\b',r'\1\1', regex=True)
         data[col] = data[col].str.replace(r'([a-zA-Z])\1\1{2,}\B',r'\1\1\1', regex=True)
         data[col] = data[col].str.replace(r'[ ]{2,}',' ', regex=True).str.strip()
-        data[col] = data[col].str.replace(r'[ ]{2,}',' ', regex=True).str.strip()
         # for tokenize
-        data[col] = data[col].str.replace(r'\"', ' \" ', regex=True)
-        data[col] = data[col].str.replace(r', ', ' , ', regex=True)
-        data[col] = data[col].str.replace(r'\.', ' . ', regex=True)
-        data[col] = data[col].str.replace(r'\n', ' [SEP] ', regex=True)
+        data[col] = data[col].str.replace(r'[1-9]', '1', regex=True)
+        data[col] = data[col].str.replace(r'\n', ' [BR] ', regex=True)
+        # data[col] = data[col].str.replace(r'\n', ' [SEP] ', regex=True)
+
         # avoid duplicated spaces
         data[col] = data[col].str.replace(r' +', ' ', regex=True)
         data[col] = data[col].str.strip()
         return data
+
+class DataPreprocessor:
+    def __init__(self, config, TextCleaner):
+        self.config = config
+        self.text_cleaner = TextCleaner()
+
+    def train_dataset(self):
+        df_train = pd.read_csv(self.config["path"]["traindata"])
+        df_train = self.text_cleaner.clean(df_train, "full_text")
+        return df_train
+
+    def test_dataset(self):
+        df_test = pd.read_csv(self.config["path"]["testdata"])
+        df_test = self.text_cleaner.clean(df_test, "full_text")
+        return df_test
+
+    def pseudo_dtaset(self):
+        # Inplement
+        return None

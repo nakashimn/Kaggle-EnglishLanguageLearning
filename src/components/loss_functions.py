@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from torch import nn
 
@@ -10,6 +11,26 @@ class FocalLoss(nn.Module):
         probas = pred.softmax(dim=1)
         loss = -(target*((1-probas)**self.gamma)*(probas.log())).mean()
         return loss
+
+class MultiTaskLoss(nn.Module):
+    def __init__(self, LossFunction: str, num_task, weight=None):
+        super().__init__()
+        self.num_task = num_task
+        if weight is None:
+            self.weight = np.array([1.0] * self.num_task)
+        else:
+            assert(len(weight)==num_task)
+            self.weight = np.array(weight)
+        self.norm_weight = torch.tensor(self.weight / np.sum(self.weight)).cuda()
+        self.criterion = eval(LossFunction)()
+
+    def forward(self, pred, target):
+        loss = torch.tensor(0).float().cuda()
+        for i in range(self.num_task):
+            loss += self.norm_weight[i] * self.criterion(pred[:, i], target[:, i])
+        return loss
+
+
 
 class PseudoLoss(nn.Module):
     def __init__(self, LossFunction: str, alpha=3, epoch_th_lower=100, epoch_th_upper=600):
