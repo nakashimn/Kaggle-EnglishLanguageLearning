@@ -7,10 +7,10 @@ import pytorch_lightning as pl
 from transformers import AutoTokenizer
 import traceback
 
-from components.preprocessor import DataPreprocessor
-from components.datamodule import NlpDataset, DataModule
-from components.models import NlpModel
-from config.sample import config
+from components.preprocessor import DataPreprocessor, TextCleaner
+from components.datamodule import FpDataset, DataModule
+from components.models import FpModel
+from config.deberta_v3_large_v0 import config
 
 class Predictor:
     def __init__(
@@ -28,16 +28,16 @@ class Predictor:
         self.Tokenizer = Tokenizer
 
         # variables
-        self.probs = None
+        self.results = None
 
     def run(self):
         # create datamodule
         datamodule = self._create_datamodule()
 
         # predict
-        self.probs = self._predict(datamodule)
+        self.results = self._predict(datamodule)
 
-        return self.probs
+        return self.results
 
     def _create_datamodule(self):
         datamodule = self.DataModule(
@@ -68,9 +68,10 @@ class Predictor:
         # prediction
         model.eval()
         with torch.inference_mode():
-            preds = trainer.predict(model, datamodule=datamodule)
-        probs = np.concatenate([p["prob"].numpy() for p in preds], axis=0)
-        return probs
+            results = trainer.predict(model, datamodule=datamodule)
+        probs = np.concatenate([r["prob"].numpy() for r in results], axis=0)
+        preds = np.argmax(probs, axis=2)
+        return {"probs": probs, "preds": preds}
 
 class PredictorEnsemble(Predictor):
     def _predict(self, datamodule):
@@ -81,6 +82,7 @@ class PredictorEnsemble(Predictor):
         )
 
         probs_folds = []
+        preds_folds = []
         for fold in range(self.config["n_splits"]):
 
             # load model
@@ -93,11 +95,16 @@ class PredictorEnsemble(Predictor):
             # prediction
             model.eval()
             with torch.inference_mode():
-                preds = trainer.predict(model, datamodule=datamodule)
-            probs = np.concatenate([p["prob"].numpy() for p in preds], axis=0)
+                results = trainer.predict(model, datamodule=datamodule)
+            probs = np.concatenate([r["prob"].numpy() for r in results], axis=0)
             probs_folds.append(probs)
+            preds_folds.append(np.argmax(probs, axis=2))
         probs_ensemble = np.mean(probs_folds, axis=0)
-        return probs_ensemble
+        preds_ensemble = np.mean(preds_folds, axis=0)
+        probs_folds = np.array(probs_folds)
+        preds_folds = np.array(preds_folds)
+        return {"probs": probs_ensemble, "preds": preds_ensemble,
+            "probs_folds": probs_folds, "preds_folds": preds_folds}
 
 def fix_seed(seed):
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -113,10 +120,8 @@ if __name__=="__main__":
     fix_seed(config["random_seed"])
 
     # Setting Dataset
-    data_preprocessor = DataPreprocessor(TextCleanerV2, config)
-    # df_test = data_preprocessor.test_dataset()
-    df_test = data_preprocessor.train_dataset()
-    df_test = df_test.drop("discourse_effectiveness", axis=1)
+    data_preprocessor = DataPreprocessor(config, TextCleaner)
+    df_test = data_preprocessor.test_dataset()
 
     # Prediction
     if config["pred_ensemble"]:
@@ -124,9 +129,9 @@ if __name__=="__main__":
     else:
         cls_predictor = Predictor
     predictor = cls_predictor(
-        FpModelV4,
-        FpDataModule,
-        FpDatasetV3,
+        FpModel,
+        DataModule,
+        FpDataset,
         AutoTokenizer,
         df_test,
         config,
@@ -135,8 +140,11 @@ if __name__=="__main__":
     predictor.run()
 
     # output
+    preds = np.mean(
+        np.array(config["label_val"])[predictor.results["preds_folds"]], axis=0
+    )
     submission = pd.concat([
         df_test[config["id"]],
-        pd.DataFrame(predictor.probs, columns=config["labels"])
+        pd.DataFrame(preds, columns=config["labels"])
     ], axis=1)
     submission.to_csv("submission.csv", index=None)

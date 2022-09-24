@@ -17,10 +17,10 @@ from transformers import AutoTokenizer
 from sklearn.model_selection import StratifiedKFold, StratifiedGroupKFold, GroupKFold
 import traceback
 
-from components.preprocessor import DataPreprocessor
-from components.datamodule import NlpDataset, DataModule
-from components.models import NlpModel
-from components.validations import MinLoss, ValidResult, ConfusionMatrix, F1Score, LogLoss
+from components.preprocessor import DataPreprocessor, TextCleaner
+from components.datamodule import FpDataset, DataModule
+from components.models import FpModelMeanPooling
+from components.validations import MinLoss, MultiTaskStats, ValidResult, MeanColumnwiseRootMeanSquareError, MultiTaskStats, ErrorHist, ScatterPlot
 
 class Trainer:
     def __init__(
@@ -53,8 +53,7 @@ class Trainer:
         iterator_kfold = enumerate(
             self.kfold.split(
                 self.df_train,
-                self.df_train[self.config["label"]],
-                self.df_train[self.config["group"]]
+                groups=self.df_train[self.config["group"]]
             )
         )
         for fold, (idx_train, idx_val) in iterator_kfold:
@@ -74,12 +73,6 @@ class Trainer:
 
         # log
         self.mlflow_logger.log_metrics({"train_min_loss": self.min_loss.value})
-
-        # train final model
-        if self.config["train_with_alldata"]:
-            datamodule = self._create_datamodule_with_alldata()
-            self._train_without_valid(datamodule, self.min_loss.value)
-
 
     def _create_datamodule(self, idx_train, idx_val):
         df_train_fold = self.df_train.loc[idx_train].reset_index(drop=True)
@@ -138,34 +131,6 @@ class Trainer:
         min_loss = model.min_loss
         return min_loss
 
-    def _train_without_valid(self, datamodule, min_loss):
-        model = self.Model(self.config["model"])
-        checkpoint_name = f"best_loss"
-
-        earystopping = EarlyStopping(
-            monitor="train_loss",
-            stopping_threshold=min_loss,
-            **self.config["earlystopping"]
-        )
-        lr_monitor = callbacks.LearningRateMonitor()
-        loss_checkpoint = callbacks.ModelCheckpoint(
-            filename=checkpoint_name,
-            **self.config["checkpoint"]
-        )
-
-        trainer = pl.Trainer(
-            logger=self.mlflow_logger,
-            callbacks=[lr_monitor, loss_checkpoint, earystopping],
-            **self.config["trainer"],
-        )
-
-        trainer.fit(model, datamodule=datamodule)
-
-        self.mlflow_logger.experiment.log_artifact(
-            self.mlflow_logger.run_id,
-            f"{self.config['path']['temporal_dir']}/{checkpoint_name}.ckpt"
-        )
-
     def _valid(self, datamodule, fold):
         checkpoint_name = f"best_loss_{fold}"
         model = self.Model.load_from_checkpoint(
@@ -192,6 +157,20 @@ def create_mlflow_logger(config):
         run_name=timestamp
     )
     return mlflow_logger
+
+def save_validation_log(trainer, config, mlflow_logger):
+    filepath_probs_log = f"{config['path']['temporal_dir']}/probs.npy"
+    np.save(filepath_probs_log, trainer.val_probs.values)
+    mlflow_logger.experiment.log_artifact(
+        mlflow_logger.run_id,
+        filepath_probs_log
+    )
+    filepath_labels_log = f"{config['path']['temporal_dir']}/labels.npy"
+    np.save(filepath_labels_log, trainer.val_labels.values)
+    mlflow_logger.experiment.log_artifact(
+        mlflow_logger.run_id,
+        filepath_labels_log
+    )
 
 def update_model(config, filepath_config):
     filepaths_ckpt = glob.glob(f"{config['path']['temporal_dir']}/*.ckpt")
@@ -252,15 +231,15 @@ if __name__=="__main__":
     )
 
     # Preprocess
-    data_preprocessor = DataPreprocessor(config)
+    data_preprocessor = DataPreprocessor(config, TextCleaner)
     fix_seed(config["random_seed"])
     df_train = data_preprocessor.train_dataset()
 
     # Training
     trainer = Trainer(
-        NlpModel,
+        FpModelMeanPooling,
         DataModule,
-        NlpDataset,
+        FpDataset,
         AutoTokenizer,
         ValidResult,
         MinLoss,
@@ -272,6 +251,51 @@ if __name__=="__main__":
     trainer.run()
 
     # Validation Result
+    save_validation_log(trainer, config, mlflow_logger)
+
+    mcrmse = MeanColumnwiseRootMeanSquareError(
+        trainer.val_probs.values,
+        trainer.val_labels.values,
+        config["Metrics"]
+    ).calc()
+    mlflow_logger.log_metrics({
+        "MCRMSE": mcrmse
+    })
+    print(f"MCRMSE: {mcrmse:.05f}")
+
+    multitask_mean, multitask_std = MultiTaskStats(
+        trainer.val_probs.values,
+        trainer.val_labels.values,
+        config["Metrics"]
+    ).calc()
+    mlflow_logger.log_metrics({
+        f"mean_{label}": val for label, val in multitask_mean.items()
+    })
+    mlflow_logger.log_metrics({
+        f"std_{label}": val for label, val in multitask_std.items()
+    })
+
+    fig_errorhist = ErrorHist(
+        trainer.val_probs.values,
+        trainer.val_labels.values,
+        config["Metrics"]
+    ).draw()
+    fig_errorhist.savefig(f"{config['path']['temporal_dir']}/errorhist.png")
+    mlflow_logger.experiment.log_artifact(
+        mlflow_logger.run_id,
+        f"{config['path']['temporal_dir']}/errorhist.png"
+    )
+
+    fig_scatter = ScatterPlot(
+        trainer.val_probs.values,
+        trainer.val_labels.values,
+        config["Metrics"]
+    ).draw()
+    fig_scatter.savefig(f"{config['path']['temporal_dir']}/scatter.png")
+    mlflow_logger.experiment.log_artifact(
+        mlflow_logger.run_id,
+        f"{config['path']['temporal_dir']}/scatter.png"
+    )
 
     # Update model
     update_model(config, f"./config/{args.config}.py")
